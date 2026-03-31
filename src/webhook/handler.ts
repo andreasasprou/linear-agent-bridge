@@ -1,8 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
 import type {
   OpenClawPluginApi,
   PluginConfig,
@@ -113,7 +110,7 @@ export function createLinearWebhook(
       res.end("Stale webhook");
       return;
     }
-    res.statusCode = 202;
+    res.statusCode = 200;
     res.setHeader("Content-Type", "application/json; charset=utf-8");
     res.end(JSON.stringify({ ok: true }));
     queueMicrotask(() => {
@@ -618,66 +615,6 @@ async function loadCallGateway(
   if (api.callGateway && typeof api.callGateway === "function") {
     callRef.value = api.callGateway as (opts: Record<string, unknown>) => Promise<unknown>;
     return callRef.value;
-  }
-  try {
-    const argv1 =
-      typeof process?.argv?.[1] === "string" ? process.argv[1] : "";
-    const distDir = argv1 ? path.dirname(argv1) : "";
-    if (distDir && fs.existsSync(distDir)) {
-      const files = fs
-        .readdirSync(distDir)
-        .filter(
-          (name) => name.startsWith("call-") && name.endsWith(".js"),
-        )
-        // Prefer call-D* over call--* because call--* imports entry.js
-        // which has a module-level side effect that calls runCli(), causing
-        // a second gateway start and a GatewayLockError crash.
-        .sort((a, b) =>
-          a.startsWith("call--") === b.startsWith("call--")
-            ? 0
-            : a.startsWith("call--")
-              ? 1
-              : -1,
-        );
-      for (const file of files) {
-        try {
-          const mod = await import(
-            pathToFileURL(path.join(distDir, file)).href
-          );
-          const fn =
-            (mod?.n as ((...args: unknown[]) => unknown) | undefined) ??
-            (mod?.callGateway as ((...args: unknown[]) => unknown) | undefined);
-          if (typeof fn === "function") {
-            const auth = api.config?.gateway?.auth ?? {};
-            const token =
-              typeof auth.token === "string"
-                ? auth.token.trim()
-                : undefined;
-            const password =
-              typeof auth.password === "string"
-                ? auth.password.trim()
-                : undefined;
-            const call = (opts: Record<string, unknown>) =>
-              fn({
-                ...opts,
-                token: (opts?.token as string | undefined) ?? token,
-                password:
-                  (opts?.password as string | undefined) ?? password,
-              });
-            callRef.value = call as (opts: Record<string, unknown>) => Promise<unknown>;
-            return callRef.value;
-          }
-        } catch (err) {
-          api.logger?.debug?.(
-            `linear: callGateway import failed (${file}): ${err instanceof Error ? err.message : String(err)}`,
-          );
-        }
-      }
-    }
-  } catch (err) {
-    api.logger?.warn?.(
-      `linear: failed to locate gateway callGateway: ${err instanceof Error ? err.message : String(err)}`,
-    );
   }
   throw new Error(
     "callGateway not available. Ensure the plugin is running inside an OpenClaw gateway process.",

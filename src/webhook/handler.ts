@@ -616,6 +616,41 @@ async function loadCallGateway(
     callRef.value = api.callGateway as (opts: Record<string, unknown>) => Promise<unknown>;
     return callRef.value;
   }
+  // Filesystem fallback: scan the gateway's dist directory for the call module.
+  try {
+    const { existsSync, readdirSync } = await import("node:fs");
+    const { dirname, join } = await import("node:path");
+    const { pathToFileURL } = await import("node:url");
+    const argv1 = typeof process?.argv?.[1] === "string" ? process.argv[1] : "";
+    const distDir = argv1 ? dirname(argv1) : "";
+    if (distDir && existsSync(distDir)) {
+      const files = readdirSync(distDir)
+        .filter((name: string) => name.startsWith("call-") && name.endsWith(".js"))
+        .sort((a: string, b: string) =>
+          a.startsWith("call--") === b.startsWith("call--") ? 0 : a.startsWith("call--") ? 1 : -1,
+        );
+      for (const file of files) {
+        try {
+          const mod = await import(pathToFileURL(join(distDir, file)).href);
+          const fn = (mod?.n as ((...args: unknown[]) => unknown) | undefined) ??
+            (mod?.callGateway as ((...args: unknown[]) => unknown) | undefined);
+          if (typeof fn === "function") {
+            const auth = api.config?.gateway?.auth ?? {};
+            const token = typeof auth.token === "string" ? auth.token.trim() : undefined;
+            const password = typeof auth.password === "string" ? auth.password.trim() : undefined;
+            const call = (opts: Record<string, unknown>) =>
+              fn({ ...opts, token: (opts?.token as string | undefined) ?? token, password: (opts?.password as string | undefined) ?? password });
+            callRef.value = call as (opts: Record<string, unknown>) => Promise<unknown>;
+            return callRef.value;
+          }
+        } catch (err) {
+          api.logger?.debug?.(`linear: callGateway import failed (${file}): ${err instanceof Error ? err.message : String(err)}`);
+        }
+      }
+    }
+  } catch (err) {
+    api.logger?.warn?.(`linear: failed to locate gateway callGateway: ${err instanceof Error ? err.message : String(err)}`);
+  }
   throw new Error(
     "callGateway not available. Ensure the plugin is running inside an OpenClaw gateway process.",
   );
